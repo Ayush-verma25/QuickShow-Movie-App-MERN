@@ -134,49 +134,147 @@ const releaseSeatsAndDeleteBooking = inngest.createFunction(
 const sendBookingConfirmationEmail = inngest.createFunction(
   {
     id: "send-booking-confirmation-email",
+    retries: 3, // Add retry configuration
   },
   {
     event: "app/show.booked",
   },
   async ({ event, step }) => {
-    const { bookingId } = event.data;
+    try {
+      const { bookingId } = event.data;
 
-    const booking = await Booking.findById(bookingId)
-      .populate({
-        path: "show",
-        populate: { path: "movie", model: "Movie" },
-      })
-      .populate("user");
+      // Validate required data
+      if (!bookingId) {
+        throw new Error("Booking ID is required");
+      }
 
-    await sendEmail({
-      to: booking.user.email,
-      subject: `Payment Confirmation: "${booking.show.movie.title}" booked!`,
-      body: `<div style="font-family: Arial, sans-serif; line-height: 1.65;">
-          <h2>Hi ${booking.user.name},</h2>
-          <p>
-            Your Booking for{" "}
-            <strong style="color: #F84565;">
-              "${booking.show.movie.title}"
-            </strong>{" "}
-            is confirmed.
-          </p>
-          <p>
-            <strong>Date:</strong> ${new Date(
-              booking.show.showDateTime
-            ).toLocaleDateString("en-US", {
+      // Use step.run for better observability and retry handling
+      const booking = await step.run("fetch-booking-details", async () => {
+        const booking = await Booking.findById(bookingId)
+          .populate({
+            path: "show",
+            populate: {
+              path: "movie",
+              model: "Movie",
+            },
+          })
+          .populate("user");
+
+        if (!booking) {
+          throw new Error(`Booking not found for ID: ${bookingId}`);
+        }
+
+        if (!booking.user?.email) {
+          throw new Error("User email not found for booking");
+        }
+
+        return booking;
+      });
+
+      // Format date and time with better error handling
+      const formatDateTime = (dateTime) => {
+        try {
+          const date = new Date(dateTime);
+          if (isNaN(date.getTime())) {
+            throw new Error("Invalid date");
+          }
+          return {
+            date: date.toLocaleDateString("en-IN", {
               timeZone: "Asia/Kolkata",
-            })}
-            <br />
-            <strong>Time:</strong> ${new Date(
-              booking.show.showDateTime
-            ).toLocaleTimeString("en-US", {
+              day: "2-digit",
+              month: "long",
+              year: "numeric",
+            }),
+            time: date.toLocaleTimeString("en-IN", {
               timeZone: "Asia/Kolkata",
-            })}
-          </p>
-          <p>Enjoy the Show! 🍿</p>
-          <p>Thanks For Booking With Us!<br/>-QuickShow Movie App Team</p>
-        </div>`,
-    });
+              hour: "2-digit",
+              minute: "2-digit",
+              hour12: true,
+            }),
+          };
+        } catch (error) {
+          console.error("Date formatting error:", error);
+          return { date: "TBD", time: "TBD" };
+        }
+      };
+
+      const { date, time } = formatDateTime(booking.show.showDateTime);
+
+      // Send email with step.run for better tracking
+      await step.run("send-confirmation-email", async () => {
+        return await sendEmail({
+          to: booking.user.email,
+          subject: `Booking Confirmed: "${booking.show.movie.title}"`,
+          body: `
+            <div style="font-family: Arial, sans-serif; line-height: 1.6; max-width: 600px; margin: 0 auto; padding: 20px;">
+              <div style="background: linear-gradient(135deg, #F84565, #FF6B8A); padding: 20px; border-radius: 10px 10px 0 0; text-align: center;">
+                <h1 style="color: white; margin: 0; font-size: 24px;">🎬 Booking Confirmed!</h1>
+              </div>
+              
+              <div style="background: #f9f9f9; padding: 30px; border-radius: 0 0 10px 10px;">
+                <h2 style="color: #333; margin-top: 0;">Hi ${
+                  booking.user.name
+                },</h2>
+                
+                <p style="font-size: 16px; color: #555;">
+                  Great news! Your booking for 
+                  <strong style="color: #F84565;">"${
+                    booking.show.movie.title
+                  }"</strong> 
+                  has been confirmed successfully.
+                </p>
+                
+                <div style="background: white; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #F84565;">
+                  <h3 style="color: #333; margin-top: 0;">📅 Show Details</h3>
+                  <p style="margin: 5px 0;"><strong>Movie:</strong> ${
+                    booking.show.movie.title
+                  }</p>
+                  <p style="margin: 5px 0;"><strong>Date:</strong> ${date}</p>
+                  <p style="margin: 5px 0;"><strong>Time:</strong> ${time}</p>
+                  <p style="margin: 5px 0;"><strong>Booking ID:</strong> ${
+                    booking._id
+                  }</p>
+                  ${
+                    booking.seats
+                      ? `<p style="margin: 5px 0;"><strong>Seats:</strong> ${
+                          Array.isArray(booking.seats)
+                            ? booking.seats.join(", ")
+                            : booking.seats
+                        }</p>`
+                      : ""
+                  }
+                </div>
+                
+                <div style="background: #E8F5E8; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                  <p style="margin: 0; color: #2D5D2D;">
+                    <strong>💡 Pro Tip:</strong> Please arrive 15 minutes before the show time. 
+                    Don't forget to bring a valid ID for verification.
+                  </p>
+                </div>
+                
+                <p style="font-size: 18px; text-align: center; margin: 30px 0;">
+                  Enjoy the show! 🍿🎭
+                </p>
+                
+                <hr style="border: none; border-top: 1px solid #ddd; margin: 30px 0;">
+                
+                <p style="color: #666; font-size: 14px; text-align: center; margin: 0;">
+                  Thanks for choosing QuickShow!<br/>
+                  <strong>QuickShow Movie App Team</strong>
+                </p>
+              </div>
+            </div>
+          `,
+        });
+      });
+
+      console.log(
+        `Booking confirmation email sent successfully for booking ${bookingId}`
+      );
+    } catch (error) {
+      console.error("Error sending booking confirmation email:", error);
+      throw error; // Re-throw to trigger Inngest retry mechanism
+    }
   }
 );
 

@@ -61,22 +61,69 @@ const releaseSeatsAndDeleteBooking = inngest.createFunction(
   },
   { event: "app/checkpayment" },
   async ({ event, step }) => {
+    // Wait for 10 minutes from when the event was triggered
     const tenMinutesLater = new Date(Date.now() + 10 * 60 * 1000);
     await step.sleepUntil("wait-for-10-minutes", tenMinutesLater);
 
     await step.run("check-payment-status", async () => {
-      const bookingId = event.date.bookingId;
-      const booking = await Booking.findById(bookingId);
+      try {
+        // Fixed: event.data instead of event.date
+        const bookingId = event.data.bookingId;
 
-      // if payment is not made, release seats and cancel booking
-      if (!booking.isPaid) {
-        const show = await Show.findById(booking.show);
-        booking.bookedSeats.forEach((seat) => {
-          delete show.occupiedSeats[seat];
-        });
-        show.markModified("occupiedSeats");
-        await show.save();
-        await Booking.findByIdAndDelete(booking._id);
+        if (!bookingId) {
+          console.error("No bookingId provided in event data");
+          return;
+        }
+
+        const booking = await Booking.findById(bookingId);
+
+        // Check if booking still exists (might have been deleted already)
+        if (!booking) {
+          console.log(
+            `Booking ${bookingId} not found, possibly already processed`
+          );
+          return;
+        }
+
+        // If payment is not made, release seats and cancel booking
+        if (!booking.isPaid) {
+          console.log(
+            `Payment not completed for booking ${bookingId}, releasing seats`
+          );
+
+          const show = await Show.findById(booking.show);
+
+          if (!show) {
+            console.error(`Show not found for booking ${bookingId}`);
+            return;
+          }
+
+          // Release the booked seats
+          if (booking.bookedSeats && booking.bookedSeats.length > 0) {
+            booking.bookedSeats.forEach((seat) => {
+              if (show.occupiedSeats && show.occupiedSeats[seat]) {
+                delete show.occupiedSeats[seat];
+              }
+            });
+
+            show.markModified("occupiedSeats");
+            await show.save();
+            console.log(
+              `Released ${booking.bookedSeats.length} seats for booking ${bookingId}`
+            );
+          }
+
+          // Delete the booking
+          await Booking.findByIdAndDelete(booking._id);
+          console.log(`Booking ${bookingId} deleted successfully`);
+        } else {
+          console.log(
+            `Payment completed for booking ${bookingId}, no action needed`
+          );
+        }
+      } catch (error) {
+        console.error("Error in check-payment-status step:", error);
+        throw error; // Re-throw to mark the step as failed
       }
     });
   }

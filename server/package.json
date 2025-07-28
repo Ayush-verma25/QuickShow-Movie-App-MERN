@@ -20,6 +20,7 @@
     "https": "^1.0.0",
     "inngest": "^3.40.1",
     "mongoose": "^8.16.4",
+    "nodemailer": "^7.0.5",
     "nodemon": "^3.1.10",
     "stripe": "^18.3.0",
     "svix": "^1.69.0"

@@ -10,8 +10,7 @@ export const inngest = new Inngest({ id: "movie-ticket-booking" });
 // Inngest Function to save user data to the database
 
 const syncUserCreation = inngest.createFunction(
-  { id: "sync-user-from-clerk" },
-  { event: "clerk/user.created" },
+  { id: "sync-user-from-clerk", triggers: { event: "clerk/user.created" } },
   async ({ event }) => {
     const { id, first_name, last_name, email_addresses, image_url } =
       event.data;
@@ -28,8 +27,7 @@ const syncUserCreation = inngest.createFunction(
 // Inngest Function to Delete User from Database
 
 const syncUserDeletion = inngest.createFunction(
-  { id: "delete-user-with-clerk" },
-  { event: "clerk/user.deleted" },
+  { id: "delete-user-with-clerk", triggers: { event: "clerk/user.deleted" } },
   async ({ event }) => {
     const { id } = event.data;
     await User.findByIdAndDelete(id);
@@ -39,8 +37,7 @@ const syncUserDeletion = inngest.createFunction(
 // Inngest Function to Update User data in Database
 
 const syncUserUpdation = inngest.createFunction(
-  { id: "update-user-from-clerk" },
-  { event: "clerk/user.updated" },
+  { id: "update-user-from-clerk", triggers: { event: "clerk/user.updated" } },
   async ({ event }) => {
     const { id, first_name, last_name, email_addresses, image_url } =
       event.data;
@@ -59,8 +56,8 @@ const syncUserUpdation = inngest.createFunction(
 const releaseSeatsAndDeleteBooking = inngest.createFunction(
   {
     id: "release-seats-delete-booking",
+    triggers: { event: "app/checkpayment" },
   },
-  { event: "app/checkpayment" },
   async ({ event, step }) => {
     // Wait for 10 minutes from when the event was triggered
     const tenMinutesLater = new Date(Date.now() + 10 * 60 * 1000);
@@ -135,9 +132,7 @@ const sendBookingConfirmationEmail = inngest.createFunction(
   {
     id: "send-booking-confirmation-email",
     retries: 3, // Add retry configuration
-  },
-  {
-    event: "app/show.booked",
+    triggers: { event: "app/show.booked" },
   },
   async ({ event, step }) => {
     try {
@@ -282,8 +277,8 @@ const sendBookingConfirmationEmail = inngest.createFunction(
 const sendShowReminders = inngest.createFunction(
   {
     id: "send-show-reminders",
+    triggers: { cron: "0 */8 * * *" }, // Every 8 hours
   },
-  { cron: "0 */8 * * *" }, // Every 8 hours
   async ({ step }) => {
     const now = new Date();
     const in8Hours = new Date(now.getTime() + 8 * 60 * 60 * 1000);
@@ -299,7 +294,8 @@ const sendShowReminders = inngest.createFunction(
       for (const show of shows) {
         if (!show.movie || !show.movie.title) continue;
 
-        const userIds = [...new set(Object.values(show.occupiedSeats))];
+        // Fixed: `new set` -> `new Set` (JS is case-sensitive; there is no global `set`)
+        const userIds = [...new Set(Object.values(show.occupiedSeats))];
         if (userIds.length === 0) continue;
 
         const users = await User.find({ _id: { $in: userIds } }).select(
@@ -362,8 +358,8 @@ const sendShowReminders = inngest.createFunction(
 const sendNewShowNotifications = inngest.createFunction(
   {
     id: "send-new-show-notifications",
+    triggers: { event: "app/show.added" },
   },
-  { event: "app/show.added" },
   async ({ event }) => {
     const { movieTitle } = event.data;
 
